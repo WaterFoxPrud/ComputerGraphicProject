@@ -31,13 +31,16 @@ float lastY = SCR_HEIGHT / 2.0f;
 float yaw = -90.0f;
 float pitch = 0.0f;
 
-// Прототипы функций
+// Позиция источника света в мировом пространстве
+glm::vec3 lightPos = glm::vec3(2.0f, 4.0f, 3.0f);
+
 void processInput(GLFWwindow* window);
 void mouse_callback(GLFWwindow* window, double xposIn, double yposIn);
 
+// Инициализация структуры Vertex с нулевыми значениями по умолчанию
 struct Vertex {
-    glm::vec3 Position;
-    glm::vec3 Normal;
+    glm::vec3 Position = glm::vec3(0.0f);
+    glm::vec3 Normal = glm::vec3(0.0f);
 };
 
 class Mesh {
@@ -74,11 +77,9 @@ private:
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), &indices[0], GL_STATIC_DRAW);
 
-        // Атрибут координат (location = 0)
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
 
-        // Атрибут нормалей (location = 1)
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, Normal));
 
@@ -96,11 +97,36 @@ public:
     }
 
     void Draw(unsigned int shaderProgram) {
+        GLint matAmbLoc = glGetUniformLocation(shaderProgram, "material.ambient");
+        GLint matDiffLoc = glGetUniformLocation(shaderProgram, "material.diffuse");
+
         for (unsigned int i = 0; i < meshes.size(); i++) {
+            // Красим каждый меш в зависимости от его индекса
+            if (i == 0) {
+                // Синий куб базы
+                glUniform3f(matAmbLoc, 0.0f, 0.05f, 0.3f);
+                glUniform3f(matDiffLoc, 0.0f, 0.1f, 0.6f);
+            }
+            else if (i == 1) {
+                // Фиолетовая штука
+                glUniform3f(matAmbLoc, 0.15f, 0.05f, 0.25f);
+                glUniform3f(matDiffLoc, 0.45f, 0.1f, 0.65f);
+            }
+            else if (i == 2) {
+                // Зелёная штанга
+                glUniform3f(matAmbLoc, 0.05f, 0.25f, 0.05f);
+                glUniform3f(matDiffLoc, 0.1f, 0.6f, 0.15f);
+            }
+            else {
+                // Оранжевый блок
+                glUniform3f(matAmbLoc, 1.0f, 0.5f, 0.0f);
+                glUniform3f(matDiffLoc, 1.0f, 0.5f, 0.0f);
+            }
+
+            // Отрисовываем текущий меш с уже примененным цветом
             meshes[i].Draw(shaderProgram);
         }
     }
-
 private:
     void loadModel(std::string const& path) {
         Assimp::Importer importer;
@@ -111,7 +137,6 @@ private:
             return;
         }
         directory = path.substr(0, path.find_last_of('/'));
-
         processNode(scene->mRootNode, scene);
     }
 
@@ -153,7 +178,6 @@ private:
                 indices.push_back(face.mIndices[j]);
             }
         }
-
         return Mesh(vertices, indices);
     }
 };
@@ -170,10 +194,7 @@ int main()
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
     GLFWwindow* MyWindow = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "MyWindow", NULL, NULL);
-    if (!MyWindow) {
-        glfwTerminate();
-        return 1;
-    }
+    if (!MyWindow) { glfwTerminate(); return 1; }
     glfwMakeContextCurrent(MyWindow);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
@@ -184,28 +205,60 @@ int main()
 
     glfwSetInputMode(MyWindow, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwSetCursorPosCallback(MyWindow, mouse_callback);
-
     glEnable(GL_DEPTH_TEST);
 
-    // Вершинный шейдер под матрицы трансформации
     const char* vert_shader =
         "#version 330 core\n"
         "layout (location = 0) in vec3 aPos;\n"
         "layout (location = 1) in vec3 aNormal;\n"
+        "out vec3 Normal;\n"
+        "out vec3 FragPos;\n" // Позиция фрагмента для расчета затухания и бликов
         "uniform mat4 model;\n"
         "uniform mat4 view;\n"
         "uniform mat4 projection;\n"
+        "uniform mat3 normalMatrix;\n" // Нормальная матрица 3x3
         "void main() {\n"
-        "   gl_Position = projection * view * model * vec4(aPos, 1.0);\n"
+        "   FragPos = vec3(model * vec4(aPos, 1.0));\n"
+        "   Normal = normalMatrix * aNormal;\n" // Корректная трансформация нормали
+        "   gl_Position = projection * view * vec4(FragPos, 1.0);\n"
         "}\0";
 
-    // Фрагментный шейдер с flat закраской
     const char* frag_shader =
         "#version 330 core\n"
-        "uniform vec3 lightColor;\n"
         "out vec4 frag_colour;\n"
+        "in vec3 Normal;\n"
+        "in vec3 FragPos;\n"
+        "struct Material {\n" // Описание свойств материала
+        "   vec3 ambient;\n"
+        "   vec3 diffuse;\n"
+        "   vec3 specular;\n"
+        "   float shininess;\n"
+        "};\n"
+        "struct Light {\n" // Описание свойств источника света
+        "   vec3 position;\n"
+        "   vec3 ambient;\n"
+        "   vec3 diffuse;\n"
+        "   vec3 specular;\n"
+        "};\n"
+        "uniform Material material;\n"
+        "uniform Light light;\n"
+        "uniform vec3 viewPos;\n" // Позиция камеры в пространстве
         "void main() {\n"
-        "   frag_colour = vec4(lightColor, 1.0);\n"
+        "   // Фоновое освещение (Ambient, Стр. 7)\n"
+        "   vec3 ambient = light.ambient * material.ambient;\n"
+        "   // Диффузное освещение (Diffuse, Стр. 7)\n"
+        "   vec3 norm = normalize(Normal);\n"
+        "   vec3 lightDir = normalize(light.position - FragPos);\n"
+        "   float diff = max(dot(norm, lightDir), 0.0);\n"
+        "   vec3 diffuse = light.diffuse * (diff * material.diffuse);\n"
+        "   // Зеркальные блики (Specular, Стр. 7)\n"
+        "   vec3 viewDir = normalize(viewPos - FragPos);\n"
+        "   vec3 reflectDir = reflect(-lightDir, norm);\n"
+        "   float spec = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);\n"
+        "   vec3 specular = light.specular * (spec * material.specular);\n"
+        "   // Результирующий цвет Фонга (Стр. 7)\n"
+        "   vec3 result = ambient + diffuse + specular;\n"
+        "   frag_colour = vec4(result, 1.0);\n"
         "}\0";
 
     GLuint vert_shaders = glCreateShader(GL_VERTEX_SHADER);
@@ -223,28 +276,53 @@ int main()
     glDeleteShader(vert_shaders);
     glDeleteShader(frag_shaders);
 
-    GLint lightColorLoc = glGetUniformLocation(shader_program, "lightColor");
+    // Локации матриц и базовых переменных
     GLint modelLoc = glGetUniformLocation(shader_program, "model");
     GLint viewLoc = glGetUniformLocation(shader_program, "view");
     GLint projLoc = glGetUniformLocation(shader_program, "projection");
+    GLint normMatLoc = glGetUniformLocation(shader_program, "normalMatrix");
+    GLint viewPosLoc = glGetUniformLocation(shader_program, "viewPos");
 
-    // Загрузка модели из папки с проектом.
+    // Локации структуры Материала
+    GLint matAmbLoc = glGetUniformLocation(shader_program, "material.ambient");
+    GLint matDiffLoc = glGetUniformLocation(shader_program, "material.diffuse");
+    GLint matSpecLoc = glGetUniformLocation(shader_program, "material.specular");
+    GLint matShinLoc = glGetUniformLocation(shader_program, "material.shininess");
+
+    // Локации структуры Света
+    GLint lightPosLoc = glGetUniformLocation(shader_program, "light.position");
+    GLint lightAmbLoc = glGetUniformLocation(shader_program, "light.ambient");
+    GLint lightDiffLoc = glGetUniformLocation(shader_program, "light.diffuse");
+    GLint lightSpecLoc = glGetUniformLocation(shader_program, "light.specular");
+
     Model ourModel("Lab3ModelVar27.obj");
-
     while (!glfwWindowShouldClose(MyWindow))
     {
         glfwPollEvents();
         processInput(MyWindow);
 
-        // Зеленый цвет фона
+        // Зеленый фон
         glClearColor(0.3f, 1.0f, 0.4f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glUseProgram(shader_program);
 
-        // Цвет закраски модели
-        glUniform3f(lightColorLoc, 0.44f, 0.85f, 0.89f);
+        // 1. Передача настроек материала
+        glUniform3f(matAmbLoc, 1.0f, 0.5f, 0.31f);
+        glUniform3f(matDiffLoc, 1.0f, 0.5f, 0.31f);
+        glUniform3f(matSpecLoc, 0.5f, 0.5f, 0.5f);
+        glUniform1f(matShinLoc, 32.0f);
 
+        // 2. Передача настроек интенсивности источника света
+        glUniform3f(lightPosLoc, lightPos.x, lightPos.y, lightPos.z);
+        glUniform3f(lightAmbLoc, 0.1f, 0.1f, 0.1f);  // Слабый фоновый свет
+        glUniform3f(lightDiffLoc, 0.8f, 0.8f, 0.8f);  // Яркий белый диффузный
+        glUniform3f(lightSpecLoc, 1.0f, 1.0f, 1.0f);  // Полный зеркальный свет
+
+        // Передача текущей позиции камеры для расчета вектора взгляда
+        glUniform3f(viewPosLoc, cameraPos.x, cameraPos.y, cameraPos.z);
+
+        // Матрицы трансформаций камеры
         float aspect = (float)SCR_WIDTH / (float)SCR_HEIGHT;
         glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
         glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
@@ -252,10 +330,14 @@ int main()
         glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
         glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
 
+        // Матрица модели манипулятора
         glm::mat4 model = glm::mat4(1.0f);
-        // Небольшое масштабирование
         model = glm::scale(model, glm::vec3(0.5f));
         glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
+
+        // Расчет и передача Нормальной матрицы
+        glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
+        glUniformMatrix3fv(normMatLoc, 1, GL_FALSE, glm::value_ptr(normalMatrix));
 
         ourModel.Draw(shader_program);
 
@@ -267,7 +349,8 @@ int main()
     return 0;
 }
 
-void processInput(GLFWwindow* window) {
+void processInput(GLFWwindow* window)
+{
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
 
@@ -286,7 +369,8 @@ void processInput(GLFWwindow* window) {
         cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
 }
 
-void mouse_callback(GLFWwindow* window, double xposIn, double yposIn) {
+void mouse_callback(GLFWwindow* window, double xposIn, double yposIn)
+{
     float xpos = static_cast<float>(xposIn);
     float ypos = static_cast<float>(yposIn);
 
