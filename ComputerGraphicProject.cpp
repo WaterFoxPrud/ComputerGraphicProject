@@ -148,7 +148,7 @@ public:
 
         // Оранжевый блок
         glm::mat4 mLink3 = glm::translate(mLink2, pivotJoint3);
-        mLink3 = glm::rotate(mLink3, glm::radians(joint3), glm::vec3(0.0f, 0.0f, 1.0f));
+        mLink3 = glm::rotate(mLink3, glm::radians(joint3), glm::vec3(0.0f, 1.0f, 0.0f));
         mLink3 = glm::translate(mLink3, -pivotJoint3);
 
         // Отрисовка мешей с распределением индивидуальных матриц и цветов
